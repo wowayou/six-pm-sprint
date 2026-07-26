@@ -1,0 +1,21 @@
+{
+  "name": "六点夺秒｜45 秒下班生存挑战",
+  "short_name": "六点夺秒",
+  "description": "单击反向，躲开临时加会，撑过下班前最后 45 秒。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#171126",
+  "theme_color": "#171126",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    {
+      "src": "assets/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

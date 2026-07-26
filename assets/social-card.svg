@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#352250"/>
+      <stop offset=".58" stop-color="#171126"/>
+      <stop offset="1" stop-color="#0b0812"/>
+    </linearGradient>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#f6f2e8" stroke-opacity=".045"/>
+    </pattern>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="10" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <g transform="translate(826 315)">
+    <circle r="210" fill="none" stroke="#f6f2e8" stroke-opacity=".1" stroke-width="3" stroke-dasharray="3 12"/>
+    <circle r="164" fill="none" stroke="#f6f2e8" stroke-opacity=".2" stroke-width="7"/>
+    <path d="M0-164A164 164 0 0 1 157-47" fill="none" stroke="#ff5b5b" stroke-width="25" stroke-linecap="round" filter="url(#glow)"/>
+    <path d="M151 64A164 164 0 0 1 34 160" fill="none" stroke="#eaff4f" stroke-width="13" stroke-linecap="round" filter="url(#glow)"/>
+    <circle r="91" fill="#201630" stroke="#f6f2e8" stroke-opacity=".18" stroke-width="2"/>
+    <path d="M0 0-8-67" stroke="#f6f2e8" stroke-width="11" stroke-linecap="round"/>
+    <path d="M0 0 60 34" stroke="#ff5b5b" stroke-width="6" stroke-linecap="round"/>
+    <circle r="10" fill="#eaff4f"/>
+    <path d="m136 111 15-11-1 18 16 9-18 5-5 17-11-15-18 2 12-14-6-17 16 6Z" fill="#eaff4f" filter="url(#glow)"/>
+  </g>
+  <g transform="translate(72 70)">
+    <rect width="68" height="68" rx="34" fill="#eaff4f"/>
+    <text x="34" y="52" text-anchor="middle" fill="#171126" font-family="Arial Black, sans-serif" font-size="50" font-weight="900">6</text>
+    <text x="86" y="29" fill="#f6f2e8" font-family="system-ui, sans-serif" font-size="26" font-weight="900">六点夺秒</text>
+    <text x="86" y="54" fill="#8f87a2" font-family="monospace" font-size="11" font-weight="700" letter-spacing="3">SIX PM SPRINT</text>
+  </g>
+  <text x="72" y="255" fill="#b9a7e8" font-family="system-ui, sans-serif" font-size="20" font-weight="800" letter-spacing="4">45 秒下班生存挑战</text>
+  <text x="72" y="338" fill="#f6f2e8" font-family="system-ui, sans-serif" font-size="70" font-weight="900">躲开加会，</text>
+  <text x="72" y="420" fill="#eaff4f" font-family="system-ui, sans-serif" font-size="70" font-weight="900">准点消失。</text>
+  <text x="76" y="493" fill="#aaa2b8" font-family="system-ui, sans-serif" font-size="23">单击反向 · 每天同一张地图 · 向同事发起挑战</text>
+  <rect x="72" y="548" width="448" height="7" fill="#68e7e2"/>
+</svg>
