@@ -19,6 +19,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html {
   min-width: 320px;
   background: var(--ink);
@@ -402,6 +406,67 @@ canvas:focus-visible {
   visibility: visible;
   opacity: 1;
   transform: translateY(0);
+}
+
+.ghost-indicator {
+  position: absolute;
+  z-index: 4;
+  top: 16px;
+  left: 50%;
+  display: flex;
+  min-height: 30px;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 10px 5px 7px;
+  border: 1px solid rgba(104, 231, 226, 0.34);
+  border-radius: 999px;
+  color: var(--cyan);
+  background: rgba(14, 10, 24, 0.78);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.2);
+  font-size: 8px;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+  transform: translateX(-50%);
+  backdrop-filter: blur(6px);
+}
+
+.ghost-indicator[hidden] {
+  display: none;
+}
+
+.ghost-indicator i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 9px var(--cyan);
+}
+
+.ghost-indicator span {
+  display: grid;
+  width: 21px;
+  height: 18px;
+  place-items: center;
+  border-radius: 99px;
+  color: var(--ink);
+  background: var(--cyan);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 900;
+}
+
+.ghost-indicator strong {
+  font-size: inherit;
+  white-space: nowrap;
+}
+
+.ghost-indicator.is-finished {
+  border-color: rgba(246, 242, 232, 0.16);
+  color: #91899f;
+}
+
+.ghost-indicator.is-finished i {
+  background: #746c81;
+  box-shadow: none;
 }
 
 .overlay {

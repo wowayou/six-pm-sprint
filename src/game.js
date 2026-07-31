@@ -2,15 +2,17 @@ import {
   GAME_DURATION,
   TAU,
   angleDistance,
+  angularTravel,
   buildSchedule,
   clamp,
   clockText,
+  decodeReplay,
+  encodeReplay,
   getResultProfile,
   getShanghaiDate,
   normalizeAngle,
   sanitizeSeed,
   scoreForPickup,
-  speedAt,
 } from "./engine.js";
 
 const $ = (selector) => document.querySelector(selector);
@@ -34,9 +36,13 @@ const elements = {
   comboValue: $("#comboValue"),
   seedLabel: $("#seedLabel"),
   challengeBanner: $("#challengeBanner"),
+  challengeLabel: $("#challengeLabel"),
+  challengeHint: $("#challengeHint"),
   challengeTarget: $("#challengeTarget"),
   challengeResult: $("#challengeResult"),
   shieldIndicator: $("#shieldIndicator"),
+  ghostIndicator: $("#ghostIndicator"),
+  ghostStatus: $("#ghostStatus"),
   bestValue: $("#bestValue"),
   playsValue: $("#playsValue"),
   dailyBestValue: $("#dailyBestValue"),
@@ -96,7 +102,8 @@ function parseGameParams() {
   const seed = sanitizeSeed(params.get("seed"), today);
   const rawTarget = Number.parseInt(params.get("target") || "", 10);
   const target = Number.isFinite(rawTarget) ? clamp(rawTarget, 1, 999999) : 0;
-  return { seed, target, isDaily: seed === today };
+  const replay = decodeReplay(params.get("ghost"));
+  return { seed, target, replay, isDaily: seed === today };
 }
 
 class SoundEngine {
@@ -188,6 +195,8 @@ const game = {
   mode: "menu",
   seed: params.seed,
   target: params.target,
+  ghostReplay: params.replay,
+  ghost: null,
   isDaily: params.isDaily,
   width: 800,
   height: 610,
@@ -209,6 +218,8 @@ const game = {
   particles: [],
   floaters: [],
   trails: [],
+  ghostTrails: [],
+  flipTimes: [],
   lastReverse: -1,
   lastFrame: performance.now(),
   shake: 0,
@@ -233,9 +244,14 @@ function updatePersistentUI() {
   elements.soundButton.setAttribute("aria-pressed", String(sound.enabled));
   elements.soundButton.setAttribute("aria-label", sound.enabled ? "关闭声音" : "打开声音");
 
-  if (game.target) {
+  if (game.target || game.ghostReplay) {
     elements.challengeBanner.hidden = false;
-    elements.challengeTarget.textContent = formatScore(game.target);
+    elements.challengeTarget.textContent = game.target
+      ? formatScore(game.target)
+      : `${game.ghostReplay.elapsed.toFixed(1)}s`;
+    elements.challengeLabel.textContent = game.ghostReplay ? "好友幽灵" : "好友战绩";
+    elements.challengeHint.textContent = game.ghostReplay ? "TA 的真实掉头路线会陪你跑" : "超过 TA，才算下班";
+    elements.startButton.querySelector("span").textContent = game.ghostReplay ? "追上 TA" : "开始夺秒";
     document.querySelector(".daily-pill").lastChild.textContent = " 好友地图";
   }
 }
@@ -264,6 +280,19 @@ function cloneSchedule() {
   game.pickups = schedule.pickups.map((pickup) => ({ ...pickup, picked: false }));
 }
 
+function createGhost() {
+  if (!game.ghostReplay) return null;
+  return {
+    angle: -Math.PI / 2,
+    direction: 1,
+    nextFlip: 0,
+    finished: false,
+    alive: true,
+    deathAngle: null,
+    replay: game.ghostReplay,
+  };
+}
+
 function startGame() {
   clearTimeout(game.revealTimer);
   sound.ensure();
@@ -284,6 +313,9 @@ function startGame() {
     particles: [],
     floaters: [],
     trails: [],
+    ghostTrails: [],
+    flipTimes: [],
+    ghost: createGhost(),
     lastReverse: -1,
     shake: 0,
     flash: 0,
@@ -295,10 +327,15 @@ function startGame() {
   elements.scoreValue.textContent = "0000";
   elements.comboValue.textContent = "×1";
   elements.shieldIndicator.classList.remove("is-active");
+  elements.ghostIndicator.hidden = !game.ghost;
+  elements.ghostIndicator.classList.remove("is-finished");
+  elements.ghostStatus.textContent = "好友幽灵陪跑中";
   setPanel(null);
-  elements.liveRegion.textContent = "游戏开始。单击或按空格键反向，撑到十八点。";
+  elements.liveRegion.textContent = game.ghost
+    ? "幽灵挑战开始。好友的真实路线正在陪跑，单击或按空格键反向。"
+    : "游戏开始。单击或按空格键反向，撑到十八点。";
   elements.canvas.focus({ preventScroll: true });
-  pulseAtPlayer("开溜！", "#eaff4f");
+  pulseAtPlayer(game.ghost ? "追上 TA！" : "开溜！", "#eaff4f");
 }
 
 function pauseGame() {
@@ -316,13 +353,17 @@ function resumeGame() {
   elements.canvas.focus({ preventScroll: true });
 }
 
-function playerPosition(radiusOffset = 0) {
+function orbitPosition(angle, radiusOffset = 0) {
   const layout = getLayout();
   const radius = layout.trackRadius + radiusOffset;
   return {
-    x: layout.cx + Math.cos(game.playerAngle) * radius,
-    y: layout.cy + Math.sin(game.playerAngle) * radius,
+    x: layout.cx + Math.cos(angle) * radius,
+    y: layout.cy + Math.sin(angle) * radius,
   };
+}
+
+function playerPosition(radiusOffset = 0) {
+  return orbitPosition(game.playerAngle, radiusOffset);
 }
 
 function vibrate(pattern) {
@@ -333,6 +374,7 @@ function reverseDirection() {
   if (game.mode !== "playing" || game.elapsed - game.lastReverse < 0.095) return;
   game.direction *= -1;
   game.lastReverse = game.elapsed;
+  game.flipTimes.push(game.elapsed);
   sound.reverse();
   vibrate(8);
 
@@ -359,9 +401,62 @@ function reverseDirection() {
   }
 }
 
+function finishGhostRun() {
+  const ghost = game.ghost;
+  if (!ghost || ghost.finished) return;
+  ghost.finished = true;
+  ghost.alive = ghost.replay.won;
+  ghost.deathAngle = ghost.angle;
+  elements.ghostIndicator.classList.add("is-finished");
+
+  if (ghost.replay.won) {
+    elements.ghostStatus.textContent = "TA 已准点下班";
+    return;
+  }
+
+  elements.ghostStatus.textContent = `TA 于 ${clockText(ghost.replay.elapsed)} 被截停`;
+  const position = orbitPosition(ghost.angle);
+  burst(position.x, position.y, "#68e7e2", 18, 125);
+}
+
+function updateGhost(fromElapsed, toElapsed) {
+  const ghost = game.ghost;
+  if (!ghost || ghost.finished) return;
+  const activeEnd = Math.min(toElapsed, ghost.replay.elapsed);
+  let cursor = Math.min(fromElapsed, activeEnd);
+
+  while (
+    ghost.nextFlip < ghost.replay.flips.length &&
+    ghost.replay.flips[ghost.nextFlip] <= activeEnd + 0.00001
+  ) {
+    const flipTime = ghost.replay.flips[ghost.nextFlip];
+    if (flipTime >= cursor) {
+      ghost.angle = normalizeAngle(ghost.angle + ghost.direction * angularTravel(cursor, flipTime));
+      cursor = flipTime;
+    }
+    ghost.direction *= -1;
+    ghost.nextFlip += 1;
+  }
+
+  if (activeEnd > cursor) {
+    ghost.angle = normalizeAngle(ghost.angle + ghost.direction * angularTravel(cursor, activeEnd));
+  }
+
+  if (activeEnd > fromElapsed) {
+    game.ghostTrails.unshift({ ...orbitPosition(ghost.angle), life: 1 });
+    if (game.ghostTrails.length > 15) game.ghostTrails.pop();
+  }
+
+  if (toElapsed >= ghost.replay.elapsed) finishGhostRun();
+}
+
 function updateGame(delta) {
+  const previousElapsed = game.elapsed;
   game.elapsed = Math.min(GAME_DURATION, game.elapsed + delta);
-  game.playerAngle = normalizeAngle(game.playerAngle + game.direction * speedAt(game.elapsed) * delta);
+  game.playerAngle = normalizeAngle(
+    game.playerAngle + game.direction * angularTravel(previousElapsed, game.elapsed)
+  );
+  updateGhost(previousElapsed, game.elapsed);
   game.score += delta * (30 + game.combo * 2.5);
 
   if (game.combo > 1 && game.elapsed > game.comboUntil) game.combo = 1;
@@ -457,6 +552,11 @@ function finishGame(won, reason = "") {
     coins: game.coins,
     maxCombo: game.maxCombo,
     profile,
+    replay: {
+      flips: [...game.flipTimes],
+      elapsed: game.elapsed,
+      won,
+    },
   };
   updateHud();
 
@@ -520,8 +620,21 @@ function updateResultPanel() {
     elements.challengeResult.hidden = false;
     elements.challengeResult.classList.toggle("is-lost", !beatTarget);
     elements.challengeResult.textContent = beatTarget
-      ? `超过好友 ${formatScore(result.score - game.target)} 分，下班成功！`
+      ? `${game.ghostReplay ? "甩开好友幽灵" : "超过好友"} ${formatScore(result.score - game.target)} 分，下班成功！`
       : `还差 ${formatScore(game.target - result.score + 1)} 分超过好友`;
+  } else if (game.ghostReplay) {
+    const elapsedDelta = result.elapsed - game.ghostReplay.elapsed;
+    const tied = Math.abs(elapsedDelta) < 0.005 && result.won === game.ghostReplay.won;
+    const outlasted = result.won !== game.ghostReplay.won
+      ? result.won
+      : elapsedDelta > 0;
+    elements.challengeResult.hidden = false;
+    elements.challengeResult.classList.toggle("is-lost", !outlasted && !tied);
+    elements.challengeResult.textContent = tied
+      ? result.won ? "你和 TA 同时准点下班，打成平手" : `你和 TA 都撑到 ${clockText(result.elapsed)}，打成平手`
+      : outlasted
+        ? `比 TA 多撑了 ${Math.abs(elapsedDelta).toFixed(1)} 秒`
+        : `TA 比你多撑了 ${Math.abs(elapsedDelta).toFixed(1)} 秒`;
   } else {
     elements.challengeResult.hidden = true;
   }
@@ -534,6 +647,10 @@ function updateEffects(delta) {
     trail.life -= delta * 2.4;
   });
   game.trails = game.trails.filter((trail) => trail.life > 0);
+  game.ghostTrails.forEach((trail) => {
+    trail.life -= delta * 2.1;
+  });
+  game.ghostTrails = game.ghostTrails.filter((trail) => trail.life > 0);
 
   game.particles.forEach((particle) => {
     particle.x += particle.vx * delta;
@@ -896,6 +1013,82 @@ function drawPlayer(ctx, layout, angle = game.playerAngle) {
   ctx.restore();
 }
 
+function drawGhost(ctx, layout) {
+  const ghost = game.ghost;
+  if (!ghost) return;
+
+  for (let index = game.ghostTrails.length - 1; index >= 0; index -= 1) {
+    const trail = game.ghostTrails[index];
+    ctx.globalAlpha = Math.max(0, trail.life) * 0.22 * (1 - index / game.ghostTrails.length);
+    ctx.fillStyle = "#68e7e2";
+    ctx.beginPath();
+    ctx.arc(trail.x, trail.y, Math.max(1, layout.minimum * 0.005 * trail.life), 0, TAU);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const angle = ghost.deathAngle ?? ghost.angle;
+  const x = layout.cx + Math.cos(angle) * layout.trackRadius;
+  const y = layout.cy + Math.sin(angle) * layout.trackRadius;
+  const size = Math.max(7, layout.minimum * 0.017);
+
+  if (ghost.finished && !ghost.replay.won) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.globalAlpha = 0.58;
+    ctx.strokeStyle = "#68e7e2";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([2, 4]);
+    ctx.beginPath();
+    ctx.arc(0, 0, size * 1.5, 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.45, -size * 0.45);
+    ctx.lineTo(size * 0.45, size * 0.45);
+    ctx.moveTo(size * 0.45, -size * 0.45);
+    ctx.lineTo(-size * 0.45, size * 0.45);
+    ctx.stroke();
+    ctx.restore();
+  } else {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle + (ghost.direction > 0 ? Math.PI / 2 : -Math.PI / 2));
+    ctx.globalAlpha = 0.76;
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "#68e7e2";
+    ctx.fillStyle = "rgba(104,231,226,0.2)";
+    ctx.shadowColor = "#68e7e2";
+    ctx.shadowBlur = 15;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, -size * 1.15);
+    ctx.lineTo(size * 0.75, size * 0.72);
+    ctx.lineTo(0, size * 0.42);
+    ctx.lineTo(-size * 0.75, size * 0.72);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  const labelRadius = layout.trackRadius - Math.max(21, layout.minimum * 0.05);
+  const labelX = layout.cx + Math.cos(angle) * labelRadius;
+  const labelY = layout.cy + Math.sin(angle) * labelRadius;
+  ctx.save();
+  ctx.translate(labelX, labelY);
+  ctx.fillStyle = "#68e7e2";
+  ctx.beginPath();
+  ctx.roundRect(-11, -7, 22, 14, 7);
+  ctx.fill();
+  ctx.fillStyle = "#171126";
+  ctx.font = "900 8px SFMono-Regular, Consolas, monospace";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("TA", 0, 0.5);
+  ctx.restore();
+}
+
 function drawParticles(ctx) {
   for (const particle of game.particles) {
     ctx.save();
@@ -966,6 +1159,7 @@ function render() {
   } else {
     game.hazards.forEach((hazard) => drawHazard(context, layout, hazard, game.elapsed));
     game.pickups.forEach((pickup) => drawPickup(context, layout, pickup, game.elapsed));
+    drawGhost(context, layout);
     drawPlayer(context, layout);
     drawDirectionHint(context, layout);
   }
@@ -1006,13 +1200,16 @@ function challengeUrl(score = 0) {
   url.hash = "";
   url.searchParams.set("seed", game.seed);
   if (score > 0) url.searchParams.set("target", String(Math.floor(score)));
+  const replay = game.result?.replay || (!game.result ? game.ghostReplay : null);
+  if (replay) url.searchParams.set("ghost", encodeReplay(replay));
   return url.toString();
 }
 
 function shareCopy(score = 0) {
   if (game.result) {
-    return `我在《六点夺秒》拿到 ${formatScore(game.result.score)} 分，解锁「${game.result.profile.title}」${game.result.profile.emoji}\n单击反向，躲开加会。你能超过我吗？`;
+    return `我在《六点夺秒》拿到 ${formatScore(game.result.score)} 分，解锁「${game.result.profile.title}」${game.result.profile.emoji}\n我的真实掉头路线已变成幽灵。你能追上 TA 吗？`;
   }
+  if (game.ghostReplay) return "我收到一条《六点夺秒》幽灵路线。一起追上 TA，看看谁先准点下班。";
   if (score > 0) return `我在《六点夺秒》的最佳战绩是 ${formatScore(score)}。最后 45 秒，你能比我更会躲加会吗？`;
   return "《六点夺秒》：单击反向，躲开加会，撑过下班前最后 45 秒。来试试今天的同一张地图。";
 }
@@ -1133,13 +1330,13 @@ async function makeResultCard() {
 
   ctx.fillStyle = "#ff5b5b";
   ctx.font = "900 26px system-ui, sans-serif";
-  ctx.fillText("最后 45 秒，你能超过我吗？", 72, 1168);
+  ctx.fillText("我的幽灵已留在跑道，你能超过我吗？", 72, 1168);
   ctx.fillStyle = "#f6f2e8";
   ctx.font = "800 34px system-ui, sans-serif";
   ctx.fillText("单击反向 · 躲开加会 · 准点消失", 72, 1222);
   ctx.fillStyle = "#6f677a";
   ctx.font = "700 18px ui-monospace, monospace";
-  ctx.fillText(`MAP ${game.seed.toUpperCase()}  /  扫描挑战链接或打开分享消息`, 72, 1328);
+  ctx.fillText(`MAP ${game.seed.toUpperCase()}  /  打开配套分享链接，追逐我的真实路线`, 72, 1328);
   ctx.fillStyle = "#eaff4f";
   ctx.fillRect(72, 1366, 936, 8);
 
@@ -1147,7 +1344,7 @@ async function makeResultCard() {
 }
 
 async function shareChallenge() {
-  const score = game.result?.score || stats.best || 0;
+  const score = game.result?.score || (game.ghostReplay ? game.target : stats.best) || 0;
   const url = challengeUrl(score);
   const text = shareCopy(score);
   const shareData = { title: "六点夺秒｜下班生存挑战", text, url };
@@ -1162,10 +1359,10 @@ async function shareChallenge() {
         }
       }
       await navigator.share(shareData);
-      showToast("挑战已发出，等同事接招");
+      showToast(game.result ? "幽灵挑战已发出，等同事接招" : "挑战已发出，等同事接招");
     } else {
       await copyText(`${text}\n${url}`);
-      showToast("战绩与挑战链接已复制");
+      showToast(game.result ? "战绩与幽灵路线已复制" : "战绩与挑战链接已复制");
     }
   } catch (error) {
     if (error?.name !== "AbortError") {

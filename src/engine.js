@@ -129,6 +129,98 @@ export function speedAt(elapsed) {
   return 1.82;
 }
 
+export function angularTravel(fromElapsed, toElapsed) {
+  if (toElapsed < fromElapsed) return -angularTravel(toElapsed, fromElapsed);
+  const start = clamp(fromElapsed, 0, GAME_DURATION);
+  const end = clamp(toElapsed, 0, GAME_DURATION);
+  if (end <= start) return 0;
+
+  const boundaries = [start, 10, 22, 34, end]
+    .filter((value) => value >= start && value <= end)
+    .sort((a, b) => a - b);
+  const points = [...new Set(boundaries)];
+  let distance = 0;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const segmentStart = points[index];
+    const segmentEnd = points[index + 1];
+    distance += (segmentEnd - segmentStart) * speedAt((segmentStart + segmentEnd) / 2);
+  }
+  return distance;
+}
+
+function replayChecksum(bytes) {
+  return bytes.reduce((checksum, byte, index) => (checksum ^ ((byte + index * 17) & 0xff)), 0xa7);
+}
+
+function toBase64Url(bytes) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function fromBase64Url(value) {
+  if (!/^[a-zA-Z0-9_-]+$/.test(value)) throw new Error("Invalid replay characters");
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(padded);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+export function encodeReplay({ flips = [], elapsed = 0, won = false } = {}) {
+  const safeElapsed = clamp(Number(elapsed) || 0, 0, GAME_DURATION);
+  const quantizedElapsed = Math.round(safeElapsed * 100);
+  const safeFlips = [];
+  for (const value of Array.isArray(flips) ? flips : []) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    const time = Math.round(clamp(numeric, 0, safeElapsed) * 100);
+    if (time > 0 && (!safeFlips.length || time > safeFlips.at(-1))) safeFlips.push(time);
+    if (safeFlips.length === 255) break;
+  }
+  const bytes = new Uint8Array(2 + safeFlips.length * 2 + 2 + 1 + 1);
+  bytes[0] = 1;
+  bytes[1] = safeFlips.length;
+  safeFlips.forEach((time, index) => {
+    bytes[2 + index * 2] = time >> 8;
+    bytes[3 + index * 2] = time & 0xff;
+  });
+  const elapsedOffset = 2 + safeFlips.length * 2;
+  bytes[elapsedOffset] = quantizedElapsed >> 8;
+  bytes[elapsedOffset + 1] = quantizedElapsed & 0xff;
+  bytes[elapsedOffset + 2] = won && quantizedElapsed === GAME_DURATION * 100 ? 1 : 0;
+  bytes[elapsedOffset + 3] = replayChecksum([...bytes.slice(0, -1)]);
+  return toBase64Url(bytes);
+}
+
+export function decodeReplay(value) {
+  if (typeof value !== "string" || value.length < 8 || value.length > 700) return null;
+  try {
+    const bytes = fromBase64Url(value);
+    if (bytes[0] !== 1) return null;
+    const count = bytes[1];
+    const expectedLength = 2 + count * 2 + 2 + 1 + 1;
+    if (bytes.length !== expectedLength) return null;
+    if (bytes.at(-1) !== replayChecksum([...bytes.slice(0, -1)])) return null;
+
+    const flips = [];
+    for (let index = 0; index < count; index += 1) {
+      const offset = 2 + index * 2;
+      const time = ((bytes[offset] << 8) | bytes[offset + 1]) / 100;
+      if (time <= 0 || time > GAME_DURATION || (flips.length && time <= flips.at(-1))) return null;
+      flips.push(time);
+    }
+    const elapsedOffset = 2 + count * 2;
+    const elapsed = ((bytes[elapsedOffset] << 8) | bytes[elapsedOffset + 1]) / 100;
+    if (elapsed < 0 || elapsed > GAME_DURATION || flips.some((time) => time > elapsed)) return null;
+    const flags = bytes[elapsedOffset + 2];
+    if (flags > 1) return null;
+    const won = flags === 1;
+    if (won && elapsed !== GAME_DURATION) return null;
+    return { flips, elapsed, won };
+  } catch {
+    return null;
+  }
+}
+
 export function clockText(elapsed) {
   const start = 17 * 3600 + 59 * 60 + 15;
   const total = start + Math.floor(clamp(elapsed, 0, GAME_DURATION));
