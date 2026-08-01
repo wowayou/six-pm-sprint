@@ -53,6 +53,19 @@ python3 scripts/build-icons.py   # 需要 Pillow 与 numpy，仅开发期使用
 
 生成后请一并提交 PNG。线上站点本身仍然零依赖。
 
+## 离线与更新策略
+
+Service Worker 把资源分成两类：
+
+- **App shell**（`index.html` / `styles.css` / `src/*.js` / manifest）走**网络优先**，断网才回退缓存
+- **图标等静态资源**走缓存优先
+
+shell 必须整体更新：`src/game.js` 在模块顶层就要取 `index.html` 里的 DOM 节点，旧 HTML 配新 JS 会直接抛 `TypeError`、整个舞台起不来。而且缓存里跑旧 `engine.js` 的人会生成**另一张"今日地图"**，破坏所有人同图这个前提。所以 shell 宁可每次多花约 100ms 也要保证版本一致。
+
+GitHub Pages 下发 `max-age=600`，因此 shell 请求带 `cache: "no-cache"` 强制重新验证——有 ETag，实际换回的是 304。
+
+`tests/service-worker.test.js` 在 stub 过的 ServiceWorkerGlobalScope 里加载 `sw.js` 验证以上行为，其中一条会检查 `index.html` 引用的每个脚本和样式表都在 shell 列表里——新增 `<script>` 但忘了登记会直接测试失败。
+
 ## GitHub Pages
 
 仓库包含 `.github/workflows/pages.yml`。推送到 `main` 后，在仓库 Settings → Pages 中将 Source 设为 **GitHub Actions**，工作流会自动发布静态站点。
