@@ -8,9 +8,11 @@ import {
   clockText,
   decodeReplay,
   encodeReplay,
+  getDailySeed,
   getResultProfile,
-  getShanghaiDate,
   normalizeAngle,
+  normalizeDailyRecords,
+  pruneDailyRecords,
   sanitizeSeed,
   scoreForPickup,
 } from "./engine.js";
@@ -35,6 +37,9 @@ const elements = {
   scoreValue: $("#scoreValue"),
   comboValue: $("#comboValue"),
   seedLabel: $("#seedLabel"),
+  mapLabel: $("#mapLabel"),
+  mapStamp: $("#mapStamp"),
+  mapPicker: $("#mapPicker"),
   challengeBanner: $("#challengeBanner"),
   challengeLabel: $("#challengeLabel"),
   challengeHint: $("#challengeHint"),
@@ -64,28 +69,25 @@ const STORAGE_KEY = "six-pm-sprint:v1";
 const PLAYER_ANGLE_RADIUS = 0.065;
 
 function readStats() {
-  const emptyDaily = () => Object.create(null);
-  const fallback = { best: 0, plays: 0, totalCoins: 0, maxCombo: 0, daily: emptyDaily() };
+  const fallback = { best: 0, plays: 0, totalCoins: 0, maxCombo: 0, daily: Object.create(null) };
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (!parsed || typeof parsed !== "object") return fallback;
     const safeNumber = (value) => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
-    const daily = emptyDaily();
-    if (parsed.daily && typeof parsed.daily === "object") {
-      for (const [key, value] of Object.entries(parsed.daily)) {
-        if (Number.isFinite(Number(value))) daily[key] = Math.max(0, Number(value));
-      }
-    }
     return {
       best: safeNumber(parsed.best),
       plays: safeNumber(parsed.plays),
       totalCoins: safeNumber(parsed.totalCoins),
       maxCombo: safeNumber(parsed.maxCombo),
-      daily,
+      daily: normalizeDailyRecords(parsed.daily),
     };
   } catch {
     return fallback;
   }
+}
+
+function dailyBestFor(seed) {
+  return stats.daily[seed]?.score || 0;
 }
 
 function writeStats(stats) {
@@ -96,14 +98,38 @@ function writeStats(stats) {
   }
 }
 
+const MAPS = {
+  today: { label: "今日地图", stamp: "DAILY" },
+  yesterday: { label: "昨日地图", stamp: "RERUN" },
+  practice: { label: "练习地图", stamp: "PRACTICE" },
+};
+
+function mapKindFor(seed) {
+  if (seed === getDailySeed(0)) return "today";
+  if (seed === getDailySeed(-1)) return "yesterday";
+  return "practice";
+}
+
+function randomPracticeSeed() {
+  const pick = () => {
+    if (globalThis.crypto?.getRandomValues) {
+      const buffer = new Uint32Array(1);
+      crypto.getRandomValues(buffer);
+      return buffer[0];
+    }
+    return Math.floor(Math.random() * 0xffffffff);
+  };
+  return `p${pick().toString(36)}${pick().toString(36)}`.slice(0, 14);
+}
+
 function parseGameParams() {
   const params = new URLSearchParams(location.search);
-  const today = getShanghaiDate();
+  const today = getDailySeed(0);
   const seed = sanitizeSeed(params.get("seed"), today);
   const rawTarget = Number.parseInt(params.get("target") || "", 10);
   const target = Number.isFinite(rawTarget) ? clamp(rawTarget, 1, 999999) : 0;
   const replay = decodeReplay(params.get("ghost"));
-  return { seed, target, replay, isDaily: seed === today };
+  return { seed, target, replay, mapKind: mapKindFor(seed) };
 }
 
 class SoundEngine {
@@ -197,7 +223,7 @@ const game = {
   target: params.target,
   ghostReplay: params.replay,
   ghost: null,
-  isDaily: params.isDaily,
+  mapKind: params.mapKind,
   width: 800,
   height: 610,
   dpr: 1,
@@ -234,7 +260,10 @@ function formatScore(value) {
 }
 
 function updatePersistentUI() {
-  const dailyBest = stats.daily[game.seed] || 0;
+  const dailyBest = dailyBestFor(game.seed);
+  const challenging = Boolean(game.target || game.ghostReplay);
+  const map = MAPS[game.mapKind] ?? MAPS.practice;
+
   elements.seedLabel.textContent = game.seed.toUpperCase();
   elements.bestValue.textContent = stats.best ? formatScore(stats.best) : "----";
   elements.playsValue.textContent = String(stats.plays || 0);
@@ -244,16 +273,69 @@ function updatePersistentUI() {
   elements.soundButton.setAttribute("aria-pressed", String(sound.enabled));
   elements.soundButton.setAttribute("aria-label", sound.enabled ? "关闭声音" : "打开声音");
 
-  if (game.target || game.ghostReplay) {
-    elements.challengeBanner.hidden = false;
-    elements.challengeTarget.textContent = game.target
-      ? formatScore(game.target)
-      : `${game.ghostReplay.elapsed.toFixed(1)}s`;
-    elements.challengeLabel.textContent = game.ghostReplay ? "好友幽灵" : "好友战绩";
-    elements.challengeHint.textContent = game.ghostReplay ? "TA 的真实掉头路线会陪你跑" : "超过 TA，才算下班";
-    elements.startButton.querySelector("span").textContent = game.ghostReplay ? "追上 TA" : "开始夺秒";
-    document.querySelector(".daily-pill").lastChild.textContent = " 好友地图";
+  // During a friend's challenge no map is "current" — the run belongs to their
+  // seed. Leaving the picker visible (rather than hidden) keeps an exit route
+  // out of the challenge; clicking any entry abandons it.
+  for (const button of elements.mapPicker.querySelectorAll("button")) {
+    button.setAttribute("aria-pressed", String(!challenging && button.dataset.map === game.mapKind));
   }
+
+  elements.challengeBanner.hidden = !challenging;
+  elements.startButton.querySelector("span").textContent = "开始夺秒";
+  elements.mapLabel.textContent = map.label;
+  elements.mapStamp.textContent = map.stamp;
+
+  if (!challenging) return;
+
+  elements.challengeTarget.textContent = game.target
+    ? formatScore(game.target)
+    : `${game.ghostReplay.elapsed.toFixed(1)}s`;
+  elements.challengeLabel.textContent = game.ghostReplay ? "好友幽灵" : "好友战绩";
+  elements.challengeHint.textContent = game.ghostReplay ? "TA 的真实掉头路线会陪你跑" : "超过 TA，才算下班";
+  elements.startButton.querySelector("span").textContent = game.ghostReplay ? "追上 TA" : "开始夺秒";
+  elements.mapLabel.textContent = "好友地图";
+  elements.mapStamp.textContent = "VERSUS";
+}
+
+function syncUrl() {
+  try {
+    const url = new URL(location.href);
+    url.search = "";
+    url.hash = "";
+    if (game.mapKind !== "today") url.searchParams.set("seed", game.seed);
+    history.replaceState(null, "", url.toString());
+  } catch {
+    // Deep-linking is a nicety; a blocked history API must not break play.
+  }
+}
+
+function selectMap(kind) {
+  if (game.mode === "playing" || game.mode === "paused") return;
+  const seed = kind === "today" ? getDailySeed(0)
+    : kind === "yesterday" ? getDailySeed(-1)
+    : randomPracticeSeed();
+
+  clearTimeout(game.revealTimer);
+  game.seed = seed;
+  game.mapKind = kind;
+  // Switching maps abandons the friend challenge — it only means anything on
+  // the seed it was sent for.
+  game.target = 0;
+  game.ghostReplay = null;
+  game.ghost = null;
+  game.result = null;
+  game.mode = "menu";
+
+  elements.ghostIndicator.hidden = true;
+  elements.challengeResult.hidden = true;
+  cloneSchedule();
+  syncUrl();
+  updatePersistentUI();
+  setPanel("start");
+  // The picker button keeps focus after a click, which would make SPACE re-roll
+  // the map instead of starting the run the panel says it starts.
+  elements.startButton.focus({ preventScroll: true });
+  elements.liveRegion.textContent = `已切换到${MAPS[kind].label}，地图代号 ${seed.toUpperCase()}。`;
 }
 
 function setPanel(panel) {
@@ -534,7 +616,7 @@ function finishGame(won, reason = "") {
   if (game.mode !== "playing") return;
   game.mode = "result";
   game.elapsed = won ? GAME_DURATION : game.elapsed;
-  game.score += won ? 1500 + game.shield * 250 : 0;
+  game.score += won ? 1500 + (game.shield ? 250 : 0) : 0;
   const finalScore = Math.floor(game.score);
   const profile = getResultProfile({
     elapsed: game.elapsed,
@@ -564,11 +646,11 @@ function finishGame(won, reason = "") {
   stats.best = Math.max(stats.best || 0, finalScore);
   stats.totalCoins = (stats.totalCoins || 0) + game.coins;
   stats.maxCombo = Math.max(stats.maxCombo || 0, game.maxCombo);
-  stats.daily[game.seed] = Math.max(stats.daily[game.seed] || 0, finalScore);
-  const dailyKeys = Object.keys(stats.daily);
-  if (dailyKeys.length > 14) {
-    dailyKeys.sort().slice(0, -14).forEach((key) => delete stats.daily[key]);
-  }
+  stats.daily[game.seed] = {
+    score: Math.max(dailyBestFor(game.seed), finalScore),
+    seen: Date.now(),
+  };
+  pruneDailyRecords(stats.daily);
   writeStats(stats);
   updatePersistentUI();
   updateResultPanel();
@@ -1407,7 +1489,19 @@ elements.soundButton.addEventListener("click", () => {
   updatePersistentUI();
 });
 
+elements.mapPicker.addEventListener("click", (event) => {
+  const kind = event.target.closest("button[data-map]")?.dataset.map;
+  if (kind) selectMap(kind);
+});
+
 document.addEventListener("keydown", (event) => {
+  if (event.code === "Escape" || event.code === "KeyP") {
+    if (game.mode !== "playing" && game.mode !== "paused") return;
+    event.preventDefault();
+    if (game.mode === "playing") pauseGame();
+    else resumeGame();
+    return;
+  }
   if (event.code !== "Space" && event.code !== "ArrowLeft" && event.code !== "ArrowRight") return;
   if (["BUTTON", "A", "INPUT", "TEXTAREA"].includes(document.activeElement?.tagName) && event.code === "Space") return;
   event.preventDefault();
@@ -1419,6 +1513,10 @@ document.addEventListener("keydown", (event) => {
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) pauseGame();
 });
+
+// visibilitychange does not fire when the window merely loses focus, so an
+// alt-tab used to leave the player running into a hazard they could not see.
+window.addEventListener("blur", pauseGame);
 
 window.addEventListener("resize", resizeCanvas, { passive: true });
 new ResizeObserver(resizeCanvas).observe(elements.stage);
