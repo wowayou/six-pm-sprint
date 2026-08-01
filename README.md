@@ -66,6 +66,8 @@ GitHub Pages 下发 `max-age=600`，因此 shell 请求带 `cache: "no-cache"` �
 
 `tests/service-worker.test.js` 在 stub 过的 ServiceWorkerGlobalScope 里加载 `sw.js` 验证以上行为，其中一条会检查 `index.html` 引用的每个脚本和样式表都在 shell 列表里——新增 `<script>` 但忘了登记会直接测试失败。
 
+> **同源多站点注意**：CacheStorage 按 **origin** 分区，不按 Service Worker scope。`wowayou.github.io` 下每个项目共用一份 CacheStorage，因此 `caches.keys()` 会列出**其他项目的缓存**。清理旧缓存时必须限定自己的前缀（本项目为 `six-pm-sprint-`），否则会在每次激活时删掉兄弟站点的离线缓存。
+
 ## GitHub Pages
 
 仓库包含 `.github/workflows/pages.yml`。推送到 `main` 后，在仓库 Settings → Pages 中将 Source 设为 **GitHub Actions**，工作流会自动发布静态站点。
