@@ -3,6 +3,7 @@
   "short_name": "六点夺秒",
   "description": "单击反向，躲开临时加会，分享路线并追逐好友幽灵。",
   "lang": "zh-CN",
+  "id": "/six-pm-sprint/",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -12,10 +13,28 @@
   "categories": ["games", "entertainment"],
   "icons": [
     {
+      "src": "assets/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
       "src": "assets/icon.svg",
       "sizes": "any",
       "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ]
 }
