@@ -1,4 +1,7 @@
-const CACHE_NAME = "six-pm-sprint-v3";
+const CACHE_NAME = "six-pm-sprint-v4";
+// Only what a player needs to actually start a round offline. The PNG icons and
+// the 400 KB social card are install-time/preview assets: the runtime handler
+// below caches them opportunistically if anything ever requests them.
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -6,9 +9,7 @@ const APP_SHELL = [
   "./src/engine.js",
   "./src/game.js",
   "./manifest.webmanifest",
-  "./assets/icon.svg",
-  "./assets/social-card.svg",
-  "./assets/social-card.png"
+  "./assets/icon.svg"
 ];
 
 self.addEventListener("install", (event) => {
