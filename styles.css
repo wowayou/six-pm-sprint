@@ -700,6 +700,41 @@ canvas:focus-visible {
   font-family: "SFMono-Regular", Consolas, monospace;
 }
 
+.map-picker {
+  display: flex;
+  gap: 4px;
+  justify-content: center;
+  margin: 13px 0 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: rgba(10, 7, 17, 0.34);
+}
+
+.map-picker button {
+  flex: 1;
+  padding: 7px 4px;
+  border: 0;
+  border-radius: 2px;
+  color: #8f87a2;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.map-picker button:hover {
+  color: var(--paper);
+}
+
+.map-picker button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--acid);
+}
+
 .result-panel {
   padding-top: 24px;
 }

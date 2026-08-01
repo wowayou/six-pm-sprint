@@ -52,6 +52,41 @@ export function getShanghaiDate(date = new Date()) {
   return `${part("year")}${part("month")}${part("day")}`;
 }
 
+// Shanghai never observes DST, so a fixed 24h shift always lands on the
+// neighbouring calendar day there.
+export function getDailySeed(offsetDays = 0, now = new Date()) {
+  return getShanghaiDate(new Date(now.getTime() + offsetDays * 86400000));
+}
+
+export const DAILY_HISTORY_LIMIT = 20;
+
+// Per-map bests used to be a bare number. Practice maps made the old
+// "keep the lexicographically-last N seeds" pruning actively harmful — a
+// letter-prefixed practice seed outranks every YYYYMMDD one — so records now
+// carry the time they were last played and are pruned by recency instead.
+export function normalizeDailyRecords(raw) {
+  const daily = Object.create(null);
+  if (!raw || typeof raw !== "object") return daily;
+  for (const [seed, value] of Object.entries(raw)) {
+    const record = value && typeof value === "object" ? value : { score: value, seen: 0 };
+    const score = Number(record.score);
+    if (!Number.isFinite(score) || score < 0) continue;
+    const seen = Number(record.seen);
+    daily[seed] = { score, seen: Number.isFinite(seen) && seen > 0 ? seen : 0 };
+  }
+  return daily;
+}
+
+export function pruneDailyRecords(daily, limit = DAILY_HISTORY_LIMIT) {
+  const seeds = Object.keys(daily);
+  if (seeds.length <= limit) return daily;
+  // Most recently played wins; seed order breaks ties so legacy records that
+  // predate the timestamp still prune deterministically.
+  const ordered = seeds.sort((a, b) => daily[b].seen - daily[a].seen || (a < b ? -1 : a > b ? 1 : 0));
+  for (const seed of ordered.slice(limit)) delete daily[seed];
+  return daily;
+}
+
 export function sanitizeSeed(value, fallback = getShanghaiDate()) {
   const clean = String(value ?? "")
     .replace(/[^a-zA-Z0-9_-]/g, "")
@@ -60,11 +95,25 @@ export function sanitizeSeed(value, fallback = getShanghaiDate()) {
   return clean && !reserved.has(clean.toLowerCase()) ? clean : fallback;
 }
 
+// Single source of truth for the difficulty ramp. Speed, hazard tuning and the
+// integration boundaries in angularTravel MUST stay in lockstep: a replay is
+// just a list of flip times, so a mismatch silently desynchronises every shared
+// ghost instead of throwing. Keep them in one table so that cannot drift.
+export const PHASES = [
+  { until: 10, speed: 1.38, hazard: { gap: 2.45, warning: 1.05, width: 0.42, duration: 1.8 } },
+  { until: 22, speed: 1.52, hazard: { gap: 2.05, warning: 0.95, width: 0.47, duration: 2.0 } },
+  { until: 34, speed: 1.67, hazard: { gap: 1.7, warning: 0.86, width: 0.52, duration: 2.15 } },
+  { until: Infinity, speed: 1.82, hazard: { gap: 1.42, warning: 0.78, width: 0.57, duration: 2.25 } },
+];
+
+export const PHASE_BOUNDARIES = PHASES.slice(0, -1).map((phase) => phase.until);
+
+function phaseAt(time) {
+  return PHASES.find((phase) => time < phase.until) ?? PHASES.at(-1);
+}
+
 function hazardSettings(time) {
-  if (time < 10) return { gap: 2.45, warning: 1.05, width: 0.42, duration: 1.8 };
-  if (time < 22) return { gap: 2.05, warning: 0.95, width: 0.47, duration: 2.0 };
-  if (time < 34) return { gap: 1.7, warning: 0.86, width: 0.52, duration: 2.15 };
-  return { gap: 1.42, warning: 0.78, width: 0.57, duration: 2.25 };
+  return phaseAt(time).hazard;
 }
 
 const HAZARD_LABELS = ["临时加会", "再改一下", "老板在吗", "需求变了", "五分钟同步"];
@@ -123,10 +172,7 @@ export function buildSchedule(seed, duration = GAME_DURATION) {
 }
 
 export function speedAt(elapsed) {
-  if (elapsed < 10) return 1.38;
-  if (elapsed < 22) return 1.52;
-  if (elapsed < 34) return 1.67;
-  return 1.82;
+  return phaseAt(elapsed).speed;
 }
 
 export function angularTravel(fromElapsed, toElapsed) {
@@ -135,7 +181,7 @@ export function angularTravel(fromElapsed, toElapsed) {
   const end = clamp(toElapsed, 0, GAME_DURATION);
   if (end <= start) return 0;
 
-  const boundaries = [start, 10, 22, 34, end]
+  const boundaries = [start, ...PHASE_BOUNDARIES, end]
     .filter((value) => value >= start && value <= end)
     .sort((a, b) => a - b);
   const points = [...new Set(boundaries)];
