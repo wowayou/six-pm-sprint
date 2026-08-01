@@ -9,7 +9,7 @@
     "dev": "node scripts/dev-server.mjs",
     "test": "node --test",
     "audit:fairness": "node scripts/audit-fairness.mjs",
-    "check": "node --check src/engine.js && node --check src/game.js && node --check scripts/dev-server.mjs && node --check scripts/audit-fairness.mjs && npm test"
+    "check": "node --check src/engine.js && node --check src/game.js && node --check sw.js && node --check scripts/dev-server.mjs && node --check scripts/audit-fairness.mjs && npm test"
   },
   "engines": {
     "node": ">=20"
