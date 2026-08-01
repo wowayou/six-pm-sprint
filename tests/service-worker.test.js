@@ -35,27 +35,36 @@ class FakeRequest {
 }
 
 // Boots sw.js against a stub ServiceWorkerGlobalScope and returns handles for
-// driving fetch events and inspecting what hit the network vs the cache.
-function bootServiceWorker({ offline = false, cached = {} } = {}) {
+// driving lifecycle events and inspecting what hit the network vs the cache.
+function bootServiceWorker({ offline = false, cached = {}, otherCaches = [] } = {}) {
   const listeners = {};
-  const store = new Map();
-  const log = { network: [], puts: [] };
+  const caches_ = new Map();
+  const log = { network: [], puts: [], deleted: [] };
 
   const keyOf = (req) => (typeof req === "string" ? new URL(req, SW_URL).href : req.url);
-  for (const [path, tag] of Object.entries(cached)) {
-    store.set(new URL(path, SW_URL).href, new FakeResponse(tag));
-  }
 
-  const cacheApi = {
+  const wrap = (entries) => ({
     async match(request) {
-      return store.get(keyOf(request))?.clone();
+      return entries.get(keyOf(request))?.clone();
     },
     async put(request, response) {
       log.puts.push(keyOf(request));
-      store.set(keyOf(request), response);
+      entries.set(keyOf(request), response);
     },
     async addAll(paths) {
-      for (const path of paths) store.set(keyOf(path), new FakeResponse(`precached:${path}`));
+      for (const path of paths) entries.set(keyOf(path), new FakeResponse(`precached:${path}`));
+    },
+  });
+
+  const cacheApi = {
+    open: async (name) => {
+      if (!caches_.has(name)) caches_.set(name, new Map());
+      return wrap(caches_.get(name));
+    },
+    keys: async () => [...caches_.keys()],
+    delete: async (name) => {
+      log.deleted.push(name);
+      return caches_.delete(name);
     },
   };
 
@@ -63,11 +72,7 @@ function bootServiceWorker({ offline = false, cached = {} } = {}) {
     URL,
     Request: FakeRequest,
     Response: FakeResponse,
-    caches: {
-      open: async () => cacheApi,
-      keys: async () => [],
-      delete: async () => true,
-    },
+    caches: cacheApi,
     async fetch(request, init) {
       log.network.push({ url: keyOf(request), cache: init?.cache ?? request?.cache });
       if (offline) throw new TypeError("Failed to fetch");
@@ -80,13 +85,25 @@ function bootServiceWorker({ offline = false, cached = {} } = {}) {
       clients: { claim: () => {} },
     },
   };
-  context.self.caches = context.caches;
+  context.self.caches = cacheApi;
   vm.createContext(context);
-  vm.runInContext(SOURCE, context, { filename: "sw.js" });
+  // Re-export the worker's own constants so the harness can seed the exact
+  // cache it will open rather than guessing the name.
+  vm.runInContext(`${SOURCE}\nglobalThis.__NAME = CACHE_NAME;`, context, { filename: "sw.js" });
+
+  const currentName = context.__NAME;
+  const current = new Map();
+  for (const [path, tag] of Object.entries(cached)) {
+    current.set(new URL(path, SW_URL).href, new FakeResponse(tag));
+  }
+  caches_.set(currentName, current);
+  for (const name of otherCaches) caches_.set(name, new Map([["seeded", new FakeResponse(name)]]));
 
   return {
     log,
-    store,
+    store: current,
+    cacheNames: () => [...caches_.keys()],
+    currentName,
     // Returns the promise passed to respondWith, or null when the worker
     // declined to handle the request and let it fall through to the network.
     dispatch(request) {
@@ -97,6 +114,11 @@ function bootServiceWorker({ offline = false, cached = {} } = {}) {
     install() {
       let pending = Promise.resolve();
       listeners.install({ waitUntil: (value) => (pending = value) });
+      return pending;
+    },
+    activate() {
+      let pending = Promise.resolve();
+      listeners.activate({ waitUntil: (value) => (pending = value) });
       return pending;
     },
   };
@@ -196,4 +218,21 @@ test("the precache covers the whole shell so a first offline load works", async 
   for (const path of ["./", "./index.html", "./styles.css", "./src/engine.js", "./src/game.js"]) {
     assert.ok(sw.store.has(new URL(path, SW_URL).href), `${path} must be precached`);
   }
+});
+
+// CacheStorage is scoped to the origin, not to the worker's scope, so
+// caches.keys() also returns caches owned by other projects hosted on the same
+// github.io account. Sweeping everything that is not ours wiped a sibling PWA's
+// offline cache on every activation — and its worker did the same back.
+test("activation only sweeps this project's own caches", async () => {
+  const sw = bootServiceWorker({
+    otherCaches: ["timelog-v80", "six-pm-sprint-v4", "some-other-app-v1"],
+  });
+  await sw.activate();
+
+  assert.deepEqual(sw.log.deleted, ["six-pm-sprint-v4"], "only our own stale cache may be dropped");
+  const surviving = sw.cacheNames();
+  assert.ok(surviving.includes("timelog-v80"), "a sibling PWA's cache must survive");
+  assert.ok(surviving.includes("some-other-app-v1"), "unrelated caches must survive");
+  assert.ok(surviving.includes(sw.currentName), "the current cache must survive");
 });

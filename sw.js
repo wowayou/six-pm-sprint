@@ -1,4 +1,10 @@
-const CACHE_NAME = "six-pm-sprint-v5";
+// CacheStorage is partitioned per origin, not per service worker scope, so
+// caches.keys() here also lists caches belonging to every other project served
+// from this github.io account. Only ever sweep our own namespace — the previous
+// "delete everything that is not me" pass wiped a sibling PWA's offline cache
+// on every activation, and its worker did the same to ours.
+const CACHE_PREFIX = "six-pm-sprint-";
+const CACHE_NAME = `${CACHE_PREFIX}v5`;
 
 // The app shell must move as one unit. src/game.js dereferences ids from
 // index.html at module scope, so an old HTML + new JS pairing is a hard
@@ -31,7 +37,11 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key)))
+      Promise.all(
+        keys
+          .filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
     )
   );
   self.clients.claim();
